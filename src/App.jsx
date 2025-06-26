@@ -19,7 +19,6 @@ const App = () => {
   const canvasRef = useRef(null);
   const gridRef = useRef(grid);
   const [phase, setPhase] = useState('claim');
-  const [canPass, setCanPass] = useState(false);
   const [winner, setWinner] = useState(null);
   const [selectedPoints, setSelectedPoints] = useState([]);
   const [claimedSquares, setClaimedSquares] = useState({ red: [], blue: [] });
@@ -28,11 +27,26 @@ const App = () => {
     gridRef.current = grid;
   }, [grid]);
 
+  // Automatic transition for claim phase
+  useEffect(() => {
+    if (phase === 'claim' && !gameOver && !(gameMode === 'vsComputer' && currentPlayer === 'blue')) {
+      const timer = setTimeout(() => {
+        if (selectedPoints.length < 4) {
+          setPhase('place');
+          setStatus(`${currentPlayer.charAt(0).toUpperCase() + currentPlayer.slice(1)}'s Turn (Place Mark)`);
+          setSelectedPoints([]);
+        }
+      }, 3000); // 3-second delay
+      return () => clearTimeout(timer);
+    }
+  }, [phase, gameOver, gameMode, currentPlayer, selectedPoints]);
+
+  // Computer turn handling
   useEffect(() => {
     if (gameMode === 'vsComputer' && currentPlayer === 'blue' && !gameOver) {
       const timer = setTimeout(() => {
         if (phase === 'claim') {
-          claimSquare(true);
+          computerClaimSquare();
         } else if (phase === 'place') {
           computerPlaceMark();
         }
@@ -61,7 +75,7 @@ const App = () => {
             p.line(0, i * 50, 350, i * 50);
           }
           
-          // Draw claimed squares first (so dots appear on top)
+          // Draw claimed squares
           claimedSquares.red.forEach(square => drawSquare(p, square, [255, 100, 100, 50]));
           claimedSquares.blue.forEach(square => drawSquare(p, square, [100, 100, 255, 50]));
           
@@ -80,7 +94,21 @@ const App = () => {
             }
           }
           
-          // Draw selected points
+          // Highlight selected points during claim phase
+          if (phase === 'claim' && selectedPoints.length > 0) {
+            selectedPoints.forEach(([row, col]) => {
+              p.fill(255, 255, 0);
+              p.ellipse(col * 50 + 25, row * 50 + 25, 36, 36);
+              if (grid[row][col].includes('red')) {
+                p.fill(255, 0, 0);
+              } else {
+                p.fill(0, 0, 255);
+              }
+              p.ellipse(col * 50 + 25, row * 50 + 25, 30, 30);
+            });
+          }
+          
+          // Draw selection rectangles
           selectedPoints.forEach(([row, col]) => {
             p.stroke(0, 255, 0);
             p.strokeWeight(3);
@@ -122,7 +150,11 @@ const App = () => {
                 if (pointIndex >= 0) {
                   setSelectedPoints(selectedPoints.filter((_, i) => i !== pointIndex));
                 } else if (selectedPoints.length < 4) {
-                  setSelectedPoints([...selectedPoints, point]);
+                  const newPoints = [...selectedPoints, point];
+                  setSelectedPoints(newPoints);
+                  if (newPoints.length === 4) {
+                    claimSquare(false);
+                  }
                 }
               }
             }
@@ -208,63 +240,49 @@ const App = () => {
   };
 
   const claimSquare = (isComputer = false) => {
-    if (gameOver || phase !== 'claim') return;
+    if (gameOver || phase !== 'claim' || selectedPoints.length !== 4) return;
     
     const currentGrid = gridRef.current;
     
-    if (isComputer) {
-      let squares = findSquares(currentPlayer, currentGrid);
+    if (!isComputer && isSquare(selectedPoints)) {
+      const sortedPoints = [...selectedPoints].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+      const square = [
+        sortedPoints[0][0], sortedPoints[0][1],
+        sortedPoints[1][0], sortedPoints[1][1],
+        sortedPoints[2][0], sortedPoints[2][1],
+        sortedPoints[3][0], sortedPoints[3][1]
+      ];
       
-      if (squares.length > 0) {
-        // Find a square that hasn't been claimed yet
-        let unclaimedSquares = squares.filter(square => 
-          !claimedSquares[currentPlayer].some(claimed => 
-            JSON.stringify(claimed) === JSON.stringify(square)
-          )
-        );
-        
-        if (unclaimedSquares.length > 0) {
-          processSquareClaim(unclaimedSquares[0]);
-        } else {
-          setPhase('place');
-          setStatus(`${currentPlayer.charAt(0).toUpperCase() + currentPlayer.slice(1)}'s Turn (Place Mark)`);
-          setCanPass(true);
-        }
+      if (!claimedSquares[currentPlayer].some(claimed => 
+        JSON.stringify(claimed) === JSON.stringify(square)
+      )) {
+        processSquareClaim(square);
       } else {
-        setPhase('place');
-        setStatus(`${currentPlayer.charAt(0).toUpperCase() + currentPlayer.slice(1)}'s Turn (Place Mark)`);
-        setCanPass(true);
+        setStatus("This square has already been claimed!");
+        setTimeout(() => setStatus(`${currentPlayer.charAt(0).toUpperCase() + currentPlayer.slice(1)}'s Turn (Select 4 points or wait to skip)`), 1500);
+        setSelectedPoints([]);
       }
+    }
+  };
+
+  const computerClaimSquare = () => {
+    if (gameOver || phase !== 'claim') return;
+    
+    const currentGrid = gridRef.current;
+    let squares = findSquares(currentPlayer, currentGrid);
+    let unclaimedSquares = squares.filter(square => 
+      !claimedSquares[currentPlayer].some(claimed => 
+        JSON.stringify(claimed) === JSON.stringify(square)
+      )
+    );
+    
+    // Computer claims with 50% probability if squares available
+    if (unclaimedSquares.length > 0 && Math.random() > 0.5) {
+      processSquareClaim(unclaimedSquares[0]);
     } else {
-      if (selectedPoints.length === 4) {
-        if (isSquare(selectedPoints)) {
-          const sortedPoints = [...selectedPoints].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-          const square = [
-            sortedPoints[0][0], sortedPoints[0][1],
-            sortedPoints[1][0], sortedPoints[1][1],
-            sortedPoints[2][0], sortedPoints[2][1],
-            sortedPoints[3][0], sortedPoints[3][1]
-          ];
-          
-          // Check if this square has already been claimed
-          const alreadyClaimed = claimedSquares[currentPlayer].some(claimed => 
-            JSON.stringify(claimed) === JSON.stringify(square)
-          );
-          
-          if (!alreadyClaimed) {
-            processSquareClaim(square);
-          } else {
-            setStatus("This square has already been claimed!");
-            setTimeout(() => setStatus(`${currentPlayer.charAt(0).toUpperCase() + currentPlayer.slice(1)}'s Turn (Claim Square)`), 1500);
-          }
-        } else {
-          setStatus("Selected points don't form a square!");
-          setTimeout(() => setStatus(`${currentPlayer.charAt(0).toUpperCase() + currentPlayer.slice(1)}'s Turn (Claim Square)`), 1500);
-        }
-      } else {
-        setStatus("Select 4 points to form a square!");
-        setTimeout(() => setStatus(`${currentPlayer.charAt(0).toUpperCase() + currentPlayer.slice(1)}'s Turn (Claim Square)`), 1500);
-      }
+      setPhase('place');
+      setStatus(`${currentPlayer.charAt(0).toUpperCase() + currentPlayer.slice(1)}'s Turn (Place Mark)`);
+      setSelectedPoints([]);
     }
   };
 
@@ -272,14 +290,12 @@ const App = () => {
     setSelectedSquare(square);
     setSelectedPoints([]);
     
-    // Award 4 points for each new square claimed
     if (currentPlayer === 'red') {
       setRedScore(prev => prev + 4);
     } else {
       setBlueScore(prev => prev + 4);
     }
     
-    // Add to claimed squares
     setClaimedSquares(prev => ({
       ...prev,
       [currentPlayer]: [...prev[currentPlayer], square]
@@ -289,17 +305,7 @@ const App = () => {
       setSelectedSquare(null);
       setPhase('place');
       setStatus(`${currentPlayer.charAt(0).toUpperCase() + currentPlayer.slice(1)}'s Turn (Place Mark)`);
-      setCanPass(false);
     }, 1200);
-  };
-
-  const passClaim = () => {
-    if (gameOver || phase !== 'claim') return;
-    
-    setSelectedPoints([]);
-    setPhase('place');
-    setStatus(`${currentPlayer.charAt(0).toUpperCase() + currentPlayer.slice(1)}'s Turn (Place Mark)`);
-    setCanPass(true);
   };
 
   const computerPlaceMark = () => {
@@ -328,7 +334,6 @@ const App = () => {
         
         let allPossibleSquares = findSquares('blue', tempGrid);
         let claimScore = allPossibleSquares.reduce((max, square) => {
-          // Only count unclaimed squares
           const isNewSquare = !claimedSquares.blue.some(claimed => 
             JSON.stringify(claimed) === JSON.stringify(square)
           );
@@ -340,7 +345,6 @@ const App = () => {
         opponentTempGrid[row][col] = 'red';
         let opponentSquares = findSquares('red', opponentTempGrid);
         if (opponentSquares.length > 0) {
-          // Check if we're blocking a new square
           const isBlockingNewSquare = opponentSquares.some(square => 
             !claimedSquares.red.some(claimed => 
               JSON.stringify(claimed) === JSON.stringify(square)
@@ -383,8 +387,7 @@ const App = () => {
     const nextPlayer = currentPlayer === 'red' ? 'blue' : 'red';
     setCurrentPlayer(nextPlayer);
     setPhase('claim');
-    setStatus(`${nextPlayer.charAt(0).toUpperCase() + nextPlayer.slice(1)}'s Turn (Claim Square)`);
-    setCanPass(true);
+    setStatus(`${nextPlayer.charAt(0).toUpperCase() + nextPlayer.slice(1)}'s Turn (Select 4 points or wait to skip)`);
     setSelectedPoints([]);
   };
 
@@ -393,11 +396,9 @@ const App = () => {
   };
 
   const countFinalScores = (finalGrid) => {
-    // Count any remaining unclaimed squares
     let redSquares = findSquares('red', finalGrid);
     let blueSquares = findSquares('blue', finalGrid);
     
-    // Filter out already claimed squares
     redSquares = redSquares.filter(square => 
       !claimedSquares.red.some(claimed => 
         JSON.stringify(claimed) === JSON.stringify(square)
@@ -410,11 +411,9 @@ const App = () => {
       )
     );
     
-    // Award points for remaining squares
     setRedScore(prev => prev + redSquares.length * 4);
     setBlueScore(prev => prev + blueSquares.length * 4);
     
-    // Add to claimed squares for visualization
     setClaimedSquares(prev => ({
       red: [...prev.red, ...redSquares],
       blue: [...prev.blue, ...blueSquares]
@@ -422,7 +421,6 @@ const App = () => {
     
     setTimeout(() => endGame(), 1000);
   };
-
 
   const endGame = () => {
     setGameOver(true);
@@ -440,8 +438,7 @@ const App = () => {
     setGameOver(false);
     setSelectedSquare(null);
     setPhase('claim');
-    setStatus("Red's Turn (Claim Square)");
-    setCanPass(true);
+    setStatus("Red's Turn (Select 4 points or wait to skip)");
     setWinner(null);
     setSelectedPoints([]);
     setClaimedSquares({ red: [], blue: [] });
@@ -484,39 +481,11 @@ const App = () => {
               <span className="text-red-600 font-medium">Red: {redScore}</span> | 
               <span className="text-blue-600 font-medium"> Blue: {blueScore}</span>
             </div>
-            
-            {phase === 'claim' && (
-              <div className="mt-4">
-                <button
-                  onClick={() => claimSquare(false)}
-                  disabled={gameOver || (gameMode === 'vsComputer' && currentPlayer === 'blue')}
-                  className={`px-4 py-2 rounded-lg font-semibold text-white transition duration-300 
-                    ${gameOver || (gameMode === 'vsComputer' && currentPlayer === 'blue') 
-                      ? 'bg-gray-400 cursor-not-allowed' 
-                      : 'bg-green-500 hover:bg-green-600'}`}
-                >
-                  Claim Square
-                </button>
-                {canPass && (
-                  <button
-                    onClick={passClaim}
-                    disabled={gameOver || (gameMode === 'vsComputer' && currentPlayer === 'blue')}
-                    className={`ml-2 px-4 py-2 rounded-lg font-semibold text-white transition duration-300 
-                      ${gameOver || (gameMode === 'vsComputer' && currentPlayer === 'blue') 
-                        ? 'bg-gray-400 cursor-not-allowed' 
-                        : 'bg-yellow-500 hover:bg-yellow-600'}`}
-                  >
-                    Pass Claim
-                  </button>
-                )}
-                {selectedPoints.length > 0 && (
-                  <div className="mt-2 text-sm">
-                    Selected: {selectedPoints.length}/4 points
-                  </div>
-                )}
+            {phase === 'claim' && selectedPoints.length > 0 && (
+              <div className="mt-2 text-sm">
+                Selected: {selectedPoints.length}/4 points
               </div>
             )}
-            
             <button
               onClick={() => startGame(null)}
               className="mt-4 px-4 py-2 rounded-lg font-semibold text-white bg-blue-500 hover:bg-blue-600 transition duration-300"
